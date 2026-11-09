@@ -31,7 +31,8 @@ const isForwardPending = (t) => t && !t.done_at && t.kind === "forward";
 const isLocal = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 
 let data = null;
-let tab = localStorage.getItem("ab.tab") || "*";
+let project = localStorage.getItem("ab.project") || "*";
+let tab = localStorage.getItem("ab.view") === "log" ? "log" : "agents";
 let selected = null; // {type: "todo"|"agent", id}
 let showClosed = localStorage.getItem("ab.closed") === "1";
 let soundOn = localStorage.getItem("ab.sound") !== null ? localStorage.getItem("ab.sound") === "1" : !isLocal;
@@ -77,60 +78,87 @@ function todoStatus(t) {
 
 // --- rendering ------------------------------------------------------------------
 
+function allProjects() {
+  const names = new Set(data.config.watch.map((w) => w.project).filter(Boolean));
+  Object.values(data.agents).forEach((a) => names.add(a.project));
+  data.todos.forEach((t) => names.add(t.project));
+  return [...names].sort();
+}
+
+const inProject = (x) => project === "*" || x.project === project;
+
+// In "all projects" view every project gets its own header row, so the projects never mix.
+function grouped(items, cols, row) {
+  if (project !== "*") return items.map(row).join("");
+  return allProjects().map((p) => {
+    const part = items.filter((x) => x.project === p);
+    return part.length ? `<tr class="group"><td colspan="${cols}">${esc(p)}</td></tr>${part.map(row).join("")}` : "";
+  }).join("");
+}
+
 function render() {
   if (!data) return;
-  const agents = Object.values(data.agents).sort((a, b) =>
-    a.project.localeCompare(b.project) || a.first_seen.localeCompare(b.first_seen));
-  const projects = [...new Set(agents.map((a) => a.project))].sort();
-  if (tab !== "*" && tab !== "log" && !projects.includes(tab)) tab = "*";
+  const projects = allProjects();
+  if (project !== "*" && !projects.includes(project)) project = "*";
+  const openIn = (p) => data.todos.filter((t) => needsAction(t) && (p === "*" || t.project === p)).length;
+  const label = (name, n) => (n ? `${esc(name)} <b>(${n})</b>` : esc(name));
+  $("#project-tabs").innerHTML = [["*", "Все проекты"], ...projects.map((p) => [p, p])].map(([id, name]) =>
+    `<li role="tab" data-project="${esc(id)}" aria-selected="${id === project}"><a href="#">${label(name, openIn(id))}</a></li>`).join("");
 
   renderTodos();
 
-  const tabs = [["*", "Все агенты"], ...projects.map((p) => [p, p]), ["log", "Журнал"]];
-  $("#tabs").innerHTML = tabs.map(([id, label]) =>
-    `<li role="tab" data-tab="${esc(id)}" aria-selected="${id === tab}"><a href="#">${esc(label)}</a></li>`).join("");
+  const agents = Object.values(data.agents).filter(inProject)
+    .sort((a, b) => a.project.localeCompare(b.project) || a.first_seen.localeCompare(b.first_seen));
+  const events = data.events.filter(inProject).reverse();
+  $("#tabs").innerHTML = [["agents", "Агенты"], ["log", "Журнал"]].map(([id, name]) =>
+    `<li role="tab" data-tab="${id}" aria-selected="${id === tab}"><a href="#">${name}</a></li>`).join("");
 
   const showLog = tab === "log";
   $("#agent-table").classList.toggle("hidden", showLog);
   $("#log-table").classList.toggle("hidden", !showLog);
 
   if (showLog) {
-    $("#log-table tbody").innerHTML = data.events.slice().reverse().map((e) => `
+    $("#log-table tbody").innerHTML = grouped(events, 5, (e) => `
       <tr><td class="c-ico"><img src="${icon(STATE_ICON[e.state])}" alt=""></td>
       <td class="nowrap">${hhmm(e.time)} <span class="sub">${esc(ago(e.time))}</span></td>
-      <td class="nowrap">${esc(e.agent)} <span class="sub">${esc(e.project)}</span></td>
+      <td class="nowrap">${esc(e.agent)}</td>
       <td class="nowrap">${esc(stateLabel(e))}${e.to ? ` → ${esc(e.to)}` : ""}${e.ack ? ` (подтвердил ${esc(e.ack)})` : ""}</td>
-      <td class="task opt" title="${esc(e.task)}">${esc(e.task)}</td></tr>`).join("");
-    $("#agents-empty").classList.toggle("hidden", data.events.length > 0);
+      <td class="task opt" title="${esc(e.task)}">${esc(e.task)}</td></tr>`);
+    $("#agents-empty").classList.toggle("hidden", events.length > 0);
   } else {
-    const list = agents.filter((a) => tab === "*" || a.project === tab);
-    $("#agent-table tbody").innerHTML = list.map((a) => {
+    $("#agent-table tbody").innerHTML = grouped(agents, 5, (a) => {
       const key = `${a.project}/${a.agent}`;
       const stale = isStale(a);
-      const label = esc(stale ? `${stateLabel(a)}? активность не подтверждена ${ago(a.updated)}` : stateLabel(a));
-      const sel = selected?.type === "agent" && selected.id === key ? " highlighted" : "";
-      return `<tr class="${stale ? "stale" : ""}${sel}" data-agent="${esc(key)}">
+      const text = esc(stale ? `${stateLabel(a)}? активность не подтверждена ${ago(a.updated)}` : stateLabel(a));
+      return `<tr class="${stale ? "stale" : ""}" data-agent="${esc(key)}">
         <td class="c-ico"><img src="${icon(stale ? STATE_ICON.stale : STATE_ICON[a.state])}" alt=""></td>
-        <td class="nowrap"><b>${esc(a.agent)}</b><span class="sub mob">${esc(a.project)}</span></td>
-        <td class="nowrap opt">${esc(a.project)}</td>
-        <td class="nowrap state">${label}${a.state === "done" && a.to ? ` → ${esc(a.to)}` : ""}</td>
+        <td class="nowrap"><b>${esc(a.agent)}</b></td>
+        <td class="nowrap state">${text}${a.state === "done" && a.to ? ` → ${esc(a.to)}` : ""}</td>
         <td class="task opt" title="${esc(a.task)}">${esc(a.task)}</td>
         <td class="nowrap">${esc(ago(a.updated))}</td></tr>`;
-    }).join("");
-    $("#agents-empty").classList.toggle("hidden", list.length > 0);
+    });
+    $("#agents-empty").classList.toggle("hidden", agents.length > 0);
   }
 
   const count = (s) => agents.filter((a) => a.state === s).length;
-  const open = data.todos.filter(needsAction).length;
-  $("#sb-main").textContent = online ? (open ? `Нужно сделать: ${open}` : "Всё под контролем") : "Нет связи с Agent Board на ПК";
+  const open = openIn(project);
+  const where = project === "*" ? "" : ` в ${project}`;
+  $("#sb-main").textContent = online ? (open ? `Нужно сделать${where}: ${open}` : `Всё под контролем${where}`) : "Нет связи с Agent Board на ПК";
   $("#sb-counts").textContent = `Агентов: ${agents.length} · работают: ${count("working")} · ждут: ${count("waiting")}`;
   $("#sb-time").textContent = `Обновлено ${new Date().toLocaleTimeString("ru-RU")}`;
-  document.title = open ? `(${open}) Agent Board` : "Agent Board";
+  const total = openIn("*");
+  const title = total ? `(${total}) Agent Board` : "Agent Board";
+  if (document.title !== title) {
+    document.title = title;
+    native()?.set_title(title);
+  }
 
   $("#sound-check").classList.toggle("on", soundOn);
   $("#notify-check").classList.toggle("on", !!data.config.notify);
   $("#closed-check").classList.toggle("on", showClosed);
-  $("#tb-sound").src = icon(soundOn ? "loudspeaker_rays-0" : "loudspeaker_muted-0");
+  const soundState = isNative ? data.config.popup_sound !== false : soundOn;
+  $("#tb-sound").src = icon(soundState ? "loudspeaker_rays-0" : "loudspeaker_muted-0");
+  $("#popup-sound-check").classList.toggle("on", data.config.popup_sound !== false);
   applySelection();
 }
 
@@ -150,21 +178,20 @@ function applySelection() {
 
 function renderTodos() {
   const todos = data.todos
-    .filter((t) => showClosed || !t.done_at)
+    .filter((t) => inProject(t) && (showClosed || !t.done_at))
     .sort((a, b) => (needsAction(b) - needsAction(a)) || (!!a.done_at - !!b.done_at) || b.created.localeCompare(a.created));
-  const open = data.todos.filter(needsAction).length;
-  $("#todo-legend").textContent = open ? `Нужно сделать (${open})` : "Нужно сделать";
-  $("#todo-table tbody").innerHTML = todos.map((t) => {
-    const sel = selected?.type === "todo" && selected.id === t.id ? " highlighted" : "";
+  const open = todos.filter(needsAction).length;
+  const name = project === "*" ? "Нужно сделать" : `Нужно сделать — ${project}`;
+  $("#todo-legend").textContent = open ? `${name} (${open})` : name;
+  $("#todo-table tbody").innerHTML = grouped(todos, 4, (t) => {
     const cls = t.done_at ? "closed" : needsAction(t) ? "" : "pending";
     const ico = t.kind === "forward" && t.forwarded_at ? "envelope_open_sheet-1" : TODO_ICON[t.kind];
-    return `<tr class="${cls}${sel}" data-todo="${t.id}">
+    return `<tr class="${cls}" data-todo="${t.id}">
       <td class="c-ico"><img src="${icon(ico)}" alt=""></td>
-      <td>${todoText(t)}<span class="sub mob"> (${esc(t.project)})</span>${t.task ? `: <span class="sub">${esc(t.task)}</span>` : ""}</td>
-      <td class="nowrap opt">${esc(t.project)}</td>
+      <td>${todoText(t)}${t.task ? `: <span class="sub">${esc(t.task)}</span>` : ""}</td>
       <td class="nowrap status">${todoStatus(t)}</td>
       <td class="nowrap opt">${esc(ago(t.created))}</td></tr>`;
-  }).join("");
+  });
   $("#todo-table").classList.toggle("hidden", todos.length === 0);
   $("#todo-empty").classList.toggle("hidden", todos.length > 0);
 }
@@ -195,7 +222,7 @@ document.addEventListener("pointerdown", () => { if (audioCtx?.state === "suspen
 
 function checkAlerts() {
   const ids = new Set(data.todos.filter(needsAction).map((t) => `${t.id}:${t.created}`));
-  if (seenAlerts && soundOn && [...ids].some((id) => !seenAlerts.has(id))) chime();
+  if (seenAlerts && soundOn && !isNative && [...ids].some((id) => !seenAlerts.has(id))) chime();
   seenAlerts = ids;
 }
 
@@ -451,11 +478,14 @@ const ACTIONS = {
     render();
   },
   "toggle-sound"() {
+    // The desktop app plays its own popup sound; there the button controls that instead.
+    if (isNative) { ACTIONS["toggle-popup-sound"](); return; }
     soundOn = !soundOn;
     localStorage.setItem("ab.sound", soundOn ? "1" : "0");
     if (soundOn) chime();
     render();
   },
+  "toggle-popup-sound"() { act("/api/config", { popup_sound: !data.config.popup_sound }); },
   "toggle-notify"() { act("/api/config", { notify: !data.config.notify }); },
   "toggle-closed"() {
     showClosed = !showClosed;
@@ -479,7 +509,16 @@ document.addEventListener("click", (e) => {
   if (t) {
     e.preventDefault();
     tab = t.dataset.tab;
-    localStorage.setItem("ab.tab", tab);
+    localStorage.setItem("ab.view", tab);
+    render();
+    return;
+  }
+  const p = e.target.closest("[data-project]");
+  if (p) {
+    e.preventDefault();
+    project = p.dataset.project;
+    localStorage.setItem("ab.project", project);
+    selected = null;
     render();
     return;
   }
@@ -490,6 +529,7 @@ document.addEventListener("click", (e) => {
   if (todoRow || agentRow) applySelection();
 });
 document.addEventListener("dblclick", (e) => {
+  if (e.target.closest("#title-text")) { ACTIONS["win-max"](); return; }
   if (selected && e.target.closest("tr[data-todo], tr[data-agent]")) ACTIONS.details();
 });
 document.addEventListener("mouseover", (e) => {
@@ -504,6 +544,64 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { $("#modal-layer").classList.add("hidden"); $("#modal-layer").innerHTML = ""; }
   if (e.key === "Delete" && selected?.type === "todo") ACTIONS["done-selected"]();
 });
+
+// --- frameless desktop window (launch.pyw opens the page with #native) -----------
+
+const isNative = location.hash.includes("native");
+document.body.classList.toggle("native", isNative);
+const native = () => (isNative && window.pywebview?.api) || null;
+
+Object.assign(ACTIONS, {
+  "win-min"() { native()?.minimize(); },
+  async "win-max"() {
+    const api = native();
+    if (!api) return;
+    const maximized = await api.toggle_maximize();
+    $("#win-max").setAttribute("aria-label", maximized ? "Restore" : "Maximize");
+    document.body.classList.toggle("maximized", !!maximized);
+  },
+  "win-close"() { native()?.close(); },
+  "win-quit"() { native()?.quit(); },
+});
+
+$("#resize-grip").addEventListener("pointerdown", (e) => {
+  const api = native();
+  if (!api || document.body.classList.contains("maximized")) return;
+  e.preventDefault();
+  const grip = e.currentTarget;
+  grip.setPointerCapture(e.pointerId);
+  const start = { x: e.screenX, y: e.screenY, w: window.innerWidth, h: window.innerHeight };
+  let pending = null;
+  let busy = false;
+  const flush = async () => {
+    if (busy || !pending) return;
+    busy = true;
+    const size = pending;
+    pending = null;
+    try { await api.resize(size.w, size.h); } finally { busy = false; flush(); }
+  };
+  const move = (ev) => {
+    pending = { w: start.w + ev.screenX - start.x, h: start.h + ev.screenY - start.y };
+    flush();
+  };
+  const up = () => {
+    grip.removeEventListener("pointermove", move);
+    grip.removeEventListener("pointerup", up);
+  };
+  grip.addEventListener("pointermove", move);
+  grip.addEventListener("pointerup", up);
+});
+
+// Called by the desktop app when "Открыть" is pressed in a popup.
+window.abFocus = (proj, todoId) => {
+  if (proj) {
+    project = proj;
+    localStorage.setItem("ab.project", project);
+  }
+  if (Number.isInteger(todoId)) selected = { type: "todo", id: todoId };
+  render();
+  document.querySelector(`tr[data-todo="${todoId}"]`)?.scrollIntoView({ block: "nearest" });
+};
 
 poll();
 setInterval(poll, 2000);

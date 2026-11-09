@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="only light">
 <title>Agent Board</title>
 <link rel="icon" href="icons/network_normal_two_pcs-1.png">
 <link rel="stylesheet" href="vendor/98.css">
@@ -11,9 +12,12 @@
 <body>
 <div class="window main-window">
   <div class="title-bar">
-    <div class="title-bar-text"><img src="icons/network_normal_two_pcs-1.png" alt="">Agent Board</div>
+    <div class="title-bar-text pywebview-drag-region" id="title-text"><img src="icons/network_normal_two_pcs-1.png" alt="">Agent Board</div>
     <div class="title-bar-controls">
-      <button aria-label="Help" data-action="about"></button>
+      <button aria-label="Help" data-action="about" class="web-only"></button>
+      <button aria-label="Minimize" data-action="win-min" class="native-only"></button>
+      <button aria-label="Maximize" data-action="win-max" class="native-only" id="win-max"></button>
+      <button aria-label="Close" data-action="win-close" class="native-only"></button>
     </div>
   </div>
 
@@ -25,13 +29,16 @@
         <div class="menu-item" data-action="pair"><img src="icons/world-1.png" alt="">Подключить телефон…</div>
         <hr>
         <div class="menu-item" data-action="clear-done">Очистить выполненные</div>
+        <hr class="native-only">
+        <div class="menu-item native-only" data-action="win-quit">Выход</div>
       </div>
     </div>
     <div class="menu" data-menu>
       <span class="menu-label"><u>В</u>ид</span>
       <div class="menu-list">
-        <div class="menu-item" data-action="toggle-sound"><span class="check" id="sound-check"></span>Звук на этом устройстве</div>
-        <div class="menu-item" data-action="toggle-notify"><span class="check" id="notify-check"></span>Уведомления Windows</div>
+        <div class="menu-item web-only" data-action="toggle-sound"><span class="check" id="sound-check"></span>Звук на этом устройстве</div>
+        <div class="menu-item" data-action="toggle-notify"><span class="check" id="notify-check"></span>Всплывающие окна на ПК</div>
+        <div class="menu-item" data-action="toggle-popup-sound"><span class="check" id="popup-sound-check"></span>Звук всплывающих окон</div>
         <div class="menu-item" data-action="toggle-closed"><span class="check" id="closed-check"></span>Показывать выполненные</div>
       </div>
     </div>
@@ -59,11 +66,14 @@
   </div>
 
   <div class="window-body">
+    <menu role="tablist" id="project-tabs" class="project-tabs"></menu>
+    <div class="window project-window" role="tabpanel">
+    <div class="window-body">
     <fieldset class="todo-box">
       <legend id="todo-legend">Нужно сделать</legend>
       <div class="sunken-panel todo-panel">
         <table class="interactive" id="todo-table">
-          <thead><tr><th class="c-ico"></th><th>Что сделать</th><th class="opt">Проект</th><th>Статус</th><th class="opt">Когда</th></tr></thead>
+          <thead><tr><th class="c-ico"></th><th>Что сделать</th><th>Статус</th><th class="opt">Когда</th></tr></thead>
           <tbody></tbody>
         </table>
         <div class="empty" id="todo-empty"><img src="icons/check-0.png" alt="">Всё переслано, никто не ждёт ответа.</div>
@@ -75,7 +85,7 @@
       <div class="window-body">
         <div class="sunken-panel agents-panel">
           <table class="interactive" id="agent-table">
-            <thead><tr><th class="c-ico"></th><th>Агент</th><th class="opt">Проект</th><th>Состояние</th><th class="opt">Задача</th><th>Обновлено</th></tr></thead>
+            <thead><tr><th class="c-ico"></th><th>Агент</th><th>Состояние</th><th class="opt">Задача</th><th>Обновлено</th></tr></thead>
             <tbody></tbody>
           </table>
           <table class="interactive hidden" id="log-table">
@@ -86,12 +96,15 @@
         </div>
       </div>
     </div>
+    </div>
+    </div>
   </div>
 
   <div class="status-bar">
     <p class="status-bar-field" id="sb-main">Загрузка…</p>
     <p class="status-bar-field" id="sb-counts"></p>
     <p class="status-bar-field" id="sb-time"></p>
+    <div class="resize-grip native-only" id="resize-grip"></div>
   </div>
 </div>
 
