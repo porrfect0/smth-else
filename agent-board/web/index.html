@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Board</title>
+<link rel="icon" href="icons/network_normal_two_pcs-1.png">
+<link rel="stylesheet" href="vendor/98.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="window main-window">
+  <div class="title-bar">
+    <div class="title-bar-text"><img src="icons/network_normal_two_pcs-1.png" alt="">Agent Board</div>
+    <div class="title-bar-controls">
+      <button aria-label="Help" data-action="about"></button>
+    </div>
+  </div>
+
+  <div class="menubar" role="menubar">
+    <div class="menu" data-menu>
+      <span class="menu-label"><u>Ф</u>айл</span>
+      <div class="menu-list">
+        <div class="menu-item" data-action="folders"><img src="icons/directory_closed-1.png" alt="">Папки с маркерами…</div>
+        <div class="menu-item" data-action="pair"><img src="icons/world-1.png" alt="">Подключить телефон…</div>
+        <hr>
+        <div class="menu-item" data-action="clear-done">Очистить выполненные</div>
+      </div>
+    </div>
+    <div class="menu" data-menu>
+      <span class="menu-label"><u>В</u>ид</span>
+      <div class="menu-list">
+        <div class="menu-item" data-action="toggle-sound"><span class="check" id="sound-check"></span>Звук на этом устройстве</div>
+        <div class="menu-item" data-action="toggle-notify"><span class="check" id="notify-check"></span>Уведомления Windows</div>
+        <div class="menu-item" data-action="toggle-closed"><span class="check" id="closed-check"></span>Показывать выполненные</div>
+      </div>
+    </div>
+    <div class="menu" data-menu>
+      <span class="menu-label"><u>С</u>правка</span>
+      <div class="menu-list">
+        <div class="menu-item" data-action="howto"><img src="icons/help_book_small-1.png" alt="">Инструкция для агентов…</div>
+        <hr>
+        <div class="menu-item" data-action="about">О программе</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button class="tool" data-action="copy-message" id="tb-copy" title="Копировать"><img src="icons/notepad_file-0.png" alt=""><span>Копировать</span></button>
+    <button class="tool" data-action="mark-forwarded" id="tb-forwarded" title="Переслал"><img src="icons/envelope_closed-0.png" alt=""><span>Переслал</span></button>
+    <button class="tool" data-action="done-selected" id="tb-done" title="Закрыть"><img src="icons/check-0.png" alt=""><span>Закрыть</span></button>
+    <span class="tool-sep"></span>
+    <button class="tool" data-action="details" id="tb-details" title="Подробно"><img src="icons/notepad-1.png" alt=""><span>Подробно</span></button>
+    <button class="tool" data-action="forget" id="tb-forget" title="Убрать"><img src="icons/recycle_bin_full-0.png" alt=""><span>Убрать</span></button>
+    <span class="tool-sep"></span>
+    <button class="tool" data-action="pair" title="Телефон"><img src="icons/world-0.png" alt=""><span>Телефон</span></button>
+    <button class="tool" data-action="toggle-sound" title="Звук"><img id="tb-sound" src="icons/loudspeaker_rays-0.png" alt=""><span>Звук</span></button>
+    <button class="tool" data-action="howto" title="Агентам"><img src="icons/help_book_small-0.png" alt=""><span>Агентам</span></button>
+  </div>
+
+  <div class="window-body">
+    <fieldset class="todo-box">
+      <legend id="todo-legend">Нужно сделать</legend>
+      <div class="sunken-panel todo-panel">
+        <table class="interactive" id="todo-table">
+          <thead><tr><th class="c-ico"></th><th>Что сделать</th><th class="opt">Проект</th><th>Статус</th><th class="opt">Когда</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="todo-empty"><img src="icons/check-0.png" alt="">Всё переслано, никто не ждёт ответа.</div>
+      </div>
+    </fieldset>
+
+    <menu role="tablist" id="tabs"></menu>
+    <div class="window tab-window" role="tabpanel">
+      <div class="window-body">
+        <div class="sunken-panel agents-panel">
+          <table class="interactive" id="agent-table">
+            <thead><tr><th class="c-ico"></th><th>Агент</th><th class="opt">Проект</th><th>Состояние</th><th class="opt">Задача</th><th>Обновлено</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <table class="interactive hidden" id="log-table">
+            <thead><tr><th class="c-ico"></th><th>Время</th><th>Агент</th><th>Событие</th><th class="opt">Задача</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div class="empty hidden" id="agents-empty"><img src="icons/users-0.png" alt="">Агентов пока нет. Они появятся сами после первого маркера (Справка → Инструкция для агентов).</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <p class="status-bar-field" id="sb-main">Загрузка…</p>
+    <p class="status-bar-field" id="sb-counts"></p>
+    <p class="status-bar-field" id="sb-time"></p>
+  </div>
+</div>
+
+<div class="modal-layer hidden" id="modal-layer"></div>
+
+<template id="tpl-dialog">
+  <div class="window dialog">
+    <div class="title-bar">
+      <div class="title-bar-text"></div>
+      <div class="title-bar-controls"><button aria-label="Close" data-close></button></div>
+    </div>
+    <div class="window-body"></div>
+  </div>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>
