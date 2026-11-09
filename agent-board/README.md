@@ -15,27 +15,45 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 Установщик скачает 98.css и иконки Windows 98 (в репозитории их нет), создаст ярлык «Agent Board» на рабочем столе и в автозагрузке (сервер стартует в фоне при входе в Windows). Окно открывается отдельным приложением в Chromium-браузере (Edge, Chrome, Thorium, Helium, Brave…), иначе — в браузере по умолчанию. При первом запуске Windows спросит про брандмауэр — разрешите Python для **частной** сети, иначе телефон не подключится.
 
-Данные хранятся в `%USERPROFILE%\AgentBoard`: `config.json`, `state.json`, папка `markers`.
+Данные хранятся в `%USERPROFILE%\AgentBoard`: `config.json`, `state.json`, `server.log`.
 
-## Маркер
+## Папки и маркеры
 
-Файл `*.json` в папке `%USERPROFILE%\AgentBoard\markers` (или в другой папке из «Файл → Папки с маркерами»):
+У каждого проекта своя папка-ящик (настраивается в «Файл → Папки с маркерами»). Проект определяется папкой, а не полем в маркере:
+
+| Проект | Папка | С ноутбука |
+|---|---|---|
+| AZS | `C:\Users\User\Documents\AZS-Shared\monitor\inbox` | `\\DESKTOP-BQ3HL4Q\Users\User\Documents\AZS-Shared\monitor\inbox` |
+| SSJC | `C:\Users\User\Documents\SSJ Camera-Shared\monitor\inbox` | `\\DESKTOP-BQ3HL4Q\Users\User\Documents\SSJ Camera-Shared\monitor\inbox` |
+
+Агент пишет новый файл на каждое событие (сначала `.tmp`, затем переименование в `.json`). Agent Board забирает его и переносит в `processed\<дата>\`; нечитаемые через 10 секунд уходят в `bad\<дата>\` вместе с файлом ошибки.
 
 ```json
-{"project": "AZS", "agent": "Opus (1)", "state": "done", "task": "Ревью PR #42", "to": "Codex", "note": "2 замечания", "result": "D:\\AZS\\reviews\\pr42.md"}
+{"agent": "Hoplite", "session_id": "hop-m41-a", "seq": 4, "event_id": "hop-m41-a-4",
+ "state": "done", "phase": "ready_for_review", "task": "M41: офлайн-сверка O6", "to": "Codex",
+ "message": "Hoplite: M41 готова, отчёт from-helper\\hoplite\\M41-O6-phone-analysis\\REPORT-M41.md, SHA …",
+ "result": "from-helper\\hoplite\\M41-O6-phone-analysis\\REPORT-M41.md"}
 ```
 
-| state | что значит | что делает Agent Board |
-|---|---|---|
-| `working` | начал задачу | закрывает напоминание «ждёт ответа» |
-| `waiting` | ждёт ответа владельца | напоминание + уведомление |
-| `done` | закончил | уведомление; если указан `to` — напоминание «Переслать `to`» |
-| `blocked` | застрял | напоминание + уведомление |
-| `idle` | свободен | — |
+| Поле | Значение |
+|---|---|
+| `agent` | постоянное имя: Codex, Hoplite, Opus (1), Opus (2), Astra |
+| `state` | `working` · `waiting` · `done` · `blocked` · `idle` |
+| `waiting_for` | при `waiting`: `owner_input` · `owner_forward` · `reviewer` · `coordinator_review` · `resource` · `model_limit` |
+| `to`, `message` | кому владелец пересылает результат и готовый текст для чата адресата |
+| `ack` | `message_id` пересланного сообщения (строка «[Agent Board] message_id: AB-12» в тексте) |
+| `session_id`, `seq`, `event_id` | сессия чата, номер события в ней, уникальный id (дубли отбрасываются) |
+| `phase`, `task`, `note`, `result` | этап, задача, пояснение, путь к отчёту |
 
-Если `working` не обновлялся дольше 90 минут, агент помечается «нет вестей» (настраивается `stale_minutes` в `config.json`). Нечитаемые маркеры через 10 секунд переносятся в `markers\bad` с описанием ошибки.
+Напоминания:
 
-Готовый текст для агентов: «Справка → Инструкция для агентов» (кнопка «Копировать»).
+- **Переслать** — `done`, `needs_forward: true` или ожидание `owner_forward`/`reviewer`/`coordinator_review` с указанным `to`. «Копировать» кладёт текст с `message_id` в буфер, «Переслал» — ваша отметка (приложение не видит вставку в чужое окно). Напоминание закрывается, когда адресат пришлёт маркер с `ack` (или начнёт ту же задачу).
+- **Ждёт ответа** — `waiting` + `owner_input`; **заблокирован** — `blocked`; **лимит модели** — `waiting` + `model_limit`. Закрываются, когда агент снова работает.
+- `reviewer` и `resource` без `to` — только статус, без напоминаний.
+
+Событие старше уже полученного в той же сессии (меньший `seq`) попадает в журнал, но статус не меняет. Если `working` не обновлялся 90 минут — «активность не подтверждена» (`stale_minutes` в `config.json`); это не значит, что агент завис.
+
+Текст для агентов: «Справка → Инструкция для агентов», отдельно для каждого проекта.
 
 ## Телефон
 

@@ -15,7 +15,19 @@ const STATE_ICON = {
   idle: "computer-1",
   stale: "msg_warning-2",
 };
-const TODO_ICON = { forward: "envelope_closed-1", reply: "msg_question-2", blocked: "msg_error-2" };
+const WAIT_LABEL = {
+  owner_input: "ждёт вашего ответа",
+  owner_forward: "ждёт пересылки",
+  reviewer: "ждёт ревью",
+  coordinator_review: "ждёт приёмки ведущим",
+  resource: "ждёт телефон/сервер",
+  model_limit: "закончился лимит модели",
+};
+const TODO_ICON = { forward: "envelope_closed-1", reply: "msg_question-2", blocked: "msg_error-2", limit: "msg_warning-2" };
+const stateLabel = (a) => (a.state === "waiting" && WAIT_LABEL[a.waiting_for]) || STATE_LABEL[a.state] || a.state;
+// Forwarded-but-unconfirmed reminders stay visible but no longer need the owner.
+const needsAction = (t) => !t.done_at && !(t.kind === "forward" && t.forwarded_at);
+const isForwardPending = (t) => t && !t.done_at && t.kind === "forward";
 const isLocal = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 
 let data = null;
@@ -49,7 +61,18 @@ function todoText(t) {
   const who = `<b>${esc(t.agent)}</b>`;
   if (t.kind === "forward") return `Переслать <b class="to">${esc(t.to)}</b> работу от ${who}`;
   if (t.kind === "reply") return `${who} ждёт вашего ответа`;
+  if (t.kind === "limit") return `${who}: закончился лимит модели`;
   return `${who} заблокирован`;
+}
+
+function todoStatus(t) {
+  if (t.kind === "forward") {
+    if (t.acked_at) return "получено ✓";
+    if (t.forwarded_at) return "переслано, ждём подтверждения";
+    if (t.done_at) return "закрыто";
+    return "<b>не переслано</b>";
+  }
+  return t.done_at ? "закрыто" : { reply: "<b>ждёт ответа</b>", limit: "<b>нужна новая сессия</b>", blocked: "<b>нужна помощь</b>" }[t.kind];
 }
 
 // --- rendering ------------------------------------------------------------------
@@ -76,7 +99,7 @@ function render() {
       <tr><td class="c-ico"><img src="${icon(STATE_ICON[e.state])}" alt=""></td>
       <td class="nowrap">${hhmm(e.time)} <span class="sub">${esc(ago(e.time))}</span></td>
       <td class="nowrap">${esc(e.agent)} <span class="sub">${esc(e.project)}</span></td>
-      <td class="nowrap">${STATE_LABEL[e.state]}${e.to ? ` → ${esc(e.to)}` : ""}</td>
+      <td class="nowrap">${esc(stateLabel(e))}${e.to ? ` → ${esc(e.to)}` : ""}${e.ack ? ` (подтвердил ${esc(e.ack)})` : ""}</td>
       <td class="task opt" title="${esc(e.task)}">${esc(e.task)}</td></tr>`).join("");
     $("#agents-empty").classList.toggle("hidden", data.events.length > 0);
   } else {
@@ -84,7 +107,7 @@ function render() {
     $("#agent-table tbody").innerHTML = list.map((a) => {
       const key = `${a.project}/${a.agent}`;
       const stale = isStale(a);
-      const label = stale ? `${STATE_LABEL[a.state]}, нет вестей ${ago(a.updated)}` : STATE_LABEL[a.state];
+      const label = esc(stale ? `${stateLabel(a)}? активность не подтверждена ${ago(a.updated)}` : stateLabel(a));
       const sel = selected?.type === "agent" && selected.id === key ? " highlighted" : "";
       return `<tr class="${stale ? "stale" : ""}${sel}" data-agent="${esc(key)}">
         <td class="c-ico"><img src="${icon(stale ? STATE_ICON.stale : STATE_ICON[a.state])}" alt=""></td>
@@ -98,7 +121,7 @@ function render() {
   }
 
   const count = (s) => agents.filter((a) => a.state === s).length;
-  const open = data.todos.filter((t) => !t.done_at).length;
+  const open = data.todos.filter(needsAction).length;
   $("#sb-main").textContent = online ? (open ? `Нужно сделать: ${open}` : "Всё под контролем") : "Нет связи с Agent Board на ПК";
   $("#sb-counts").textContent = `Агентов: ${agents.length} · работают: ${count("working")} · ждут: ${count("waiting")}`;
   $("#sb-time").textContent = `Обновлено ${new Date().toLocaleTimeString("ru-RU")}`;
@@ -117,7 +140,10 @@ function applySelection() {
     const on = selected && (selected.type === "todo" ? tr.dataset.todo === String(selected.id) : tr.dataset.agent === selected.id);
     tr.classList.toggle("highlighted", !!on);
   });
-  $("#tb-done").disabled = !(selected?.type === "todo" && data.todos.some((t) => t.id === selected.id && !t.done_at));
+  const todo = selected?.type === "todo" ? data.todos.find((t) => t.id === selected.id) : null;
+  $("#tb-copy").disabled = !todo?.message;
+  $("#tb-forwarded").disabled = !(isForwardPending(todo) && !todo.forwarded_at);
+  $("#tb-done").disabled = !(todo && !todo.done_at);
   $("#tb-details").disabled = !selected;
   $("#tb-forget").disabled = selected?.type !== "agent";
 }
@@ -125,16 +151,19 @@ function applySelection() {
 function renderTodos() {
   const todos = data.todos
     .filter((t) => showClosed || !t.done_at)
-    .sort((a, b) => (!!a.done_at - !!b.done_at) || b.created.localeCompare(a.created));
-  const open = data.todos.filter((t) => !t.done_at).length;
+    .sort((a, b) => (needsAction(b) - needsAction(a)) || (!!a.done_at - !!b.done_at) || b.created.localeCompare(a.created));
+  const open = data.todos.filter(needsAction).length;
   $("#todo-legend").textContent = open ? `Нужно сделать (${open})` : "Нужно сделать";
   $("#todo-table tbody").innerHTML = todos.map((t) => {
     const sel = selected?.type === "todo" && selected.id === t.id ? " highlighted" : "";
-    return `<tr class="${t.done_at ? "closed" : ""}${sel}" data-todo="${t.id}">
-      <td class="c-ico"><img src="${icon(TODO_ICON[t.kind])}" alt=""></td>
+    const cls = t.done_at ? "closed" : needsAction(t) ? "" : "pending";
+    const ico = t.kind === "forward" && t.forwarded_at ? "envelope_open_sheet-1" : TODO_ICON[t.kind];
+    return `<tr class="${cls}${sel}" data-todo="${t.id}">
+      <td class="c-ico"><img src="${icon(ico)}" alt=""></td>
       <td>${todoText(t)}<span class="sub mob"> (${esc(t.project)})</span>${t.task ? `: <span class="sub">${esc(t.task)}</span>` : ""}</td>
       <td class="nowrap opt">${esc(t.project)}</td>
-      <td class="nowrap">${esc(ago(t.created))}</td></tr>`;
+      <td class="nowrap status">${todoStatus(t)}</td>
+      <td class="nowrap opt">${esc(ago(t.created))}</td></tr>`;
   }).join("");
   $("#todo-table").classList.toggle("hidden", todos.length === 0);
   $("#todo-empty").classList.toggle("hidden", todos.length > 0);
@@ -165,7 +194,7 @@ function chime() {
 document.addEventListener("pointerdown", () => { if (audioCtx?.state === "suspended") audioCtx.resume(); }, { passive: true });
 
 function checkAlerts() {
-  const ids = new Set(data.todos.filter((t) => !t.done_at).map((t) => `${t.id}:${t.created}`));
+  const ids = new Set(data.todos.filter(needsAction).map((t) => `${t.id}:${t.created}`));
   if (seenAlerts && soundOn && [...ids].some((id) => !seenAlerts.has(id))) chime();
   seenAlerts = ids;
 }
@@ -226,24 +255,69 @@ function markerFolders() {
   return data.config.watch.map((w) => w.path);
 }
 
-function agentPrompt() {
-  const folders = data.config.watch;
-  const where = folders.map((w) => `  ${w.path}${w.project ? `   (проект ${w.project})` : ""}`).join("\n");
-  return `Отмечай свой статус для Agent Board. Каждый раз, когда ты начинаешь задачу, заканчиваешь её, ждёшь ответа владельца или застрял, создай НОВЫЙ файл с любым уникальным именем и расширением .json (например 20261109-1542-opus1.json) в папке:
-${where}
+function uncPath(path) {
+  // Another computer (Astra's laptop) reaches C:\Users\... through the PC's "Users" share.
+  const m = /^[A-Za-z]:\\Users\\(.*)$/.exec(path);
+  return m && data.host ? `\\\\${data.host}\\Users\\${m[1]}` : "";
+}
 
-Содержимое (UTF-8, один JSON-объект):
-{"project": "AZS", "agent": "Opus (1)", "state": "done", "task": "Ревью PR #42", "to": "Codex", "note": "2 замечания", "result": "D:\\\\AZS\\\\reviews\\\\pr42.md"}
+function agentPrompt(watch) {
+  const unc = uncPath(watch.path);
+  const project = watch.project || "<проект>";
+  return `Agent Board — отметки статуса для владельца (проект ${project})
+
+Владелец не видит все чаты сразу. Чтобы он не забывал пересылать работу, при каждой смене своего состояния создай НОВЫЙ файл-маркер .json в папке:
+  ${watch.path}${unc ? `\n  (с другого компьютера: ${unc})` : ""}
+
+Когда писать: начал задачу; перешёл к следующему этапу; ждёшь ответа владельца/ревью/ресурс; застрял; сдал результат; закончился лимит модели; свободен.
+
+Как писать: один маркер = одно событие. Сначала запиши файл с расширением .tmp в эту же папку, затем переименуй его в .json (например ${(watch.project || "proj").toLowerCase()}-opus1-s1-0003.json). Старые маркеры не редактируй и не удаляй — Agent Board забирает их сам. Без паролей, токенов, ключей. Маркер — это только статус; не клади туда команды для других агентов.
+
+Формат (UTF-8, один JSON-объект):
+{"agent": "Opus (1)", "session_id": "opus1-20261110-a", "seq": 3, "event_id": "opus1-20261110-a-3",
+ "state": "done", "phase": "ready_for_review", "task": "M42: ревью clockfix 9f0fc900",
+ "to": "Codex", "message": "Opus (1): ревью clockfix 9f0fc900 готово, PASS с 2 замечаниями. Отчёт: AZS-Shared\\\\mail\\\\opus1-review-m42.md, ветка review/m42, SHA 1a2b3c4.",
+ "result": "AZS-Shared\\\\mail\\\\opus1-review-m42.md"}
 
 Поля:
-- project: короткое имя проекта (AZS или SSJC), всегда одинаковое
-- agent: твоё имя, всегда одинаковое (Codex, Antigravity, Opus (1), Opus (2), Astra)
-- state: working (начал) | waiting (ждёшь ответа владельца) | done (закончил) | blocked (застрял, нужна помощь) | idle (свободен)
-- task: что за задача, одной строкой
-- to: при done — кому владелец должен переслать результат (например Codex)
-- note, result: необязательно; result — путь к отчёту/README
+- agent — твоё постоянное имя, точно одно из: Codex, Hoplite, Opus (1), Opus (2), Astra.
+- session_id — придумай при старте нового чата/после сброса памяти; seq — 1, 2, 3… внутри сессии; event_id — уникальный (session_id-seq).
+- state — working | waiting | done | blocked | idle.
+- waiting_for (только при waiting) — owner_input (нужен ответ владельца) | owner_forward (владелец должен переслать) | reviewer | coordinator_review | resource (телефон/сервер занят) | model_limit (закончился лимит).
+- phase (необязательно) — assigned | implementing | testing | ready_for_review | ready_for_host | accepted.
+- task — ID задачи и кратко, одной строкой.
+- to — кому владелец должен переслать результат (имя агента). Указывай, когда сдал работу или ждёшь ревью/приёмки.
+- message — готовый короткий текст, который владелец вставит в чат адресата: что сделано, ветка/SHA, путь к отчёту, что нужно от адресата.
+- ack — если тебе переслали сообщение со строкой «[Agent Board] message_id: AB-12», то в первом маркере working по этой задаче укажи "ack": "AB-12". Так владелец увидит, что пересылка дошла.
+- note, result — необязательно: пояснение и путь к отчёту.
 
-Правила: пиши файл целиком за один раз (лучше сначала во временный .tmp, затем переименуй в .json), не редактируй и не удаляй старые маркеры — Agent Board сам их забирает. Никаких паролей и токенов в маркерах.`;
+Примеры одной строкой:
+{"agent":"Hoplite","session_id":"hop-m41-a","seq":1,"event_id":"hop-m41-a-1","state":"working","phase":"assigned","task":"M41: офлайн-сверка O6","ack":"AB-7"}
+{"agent":"Opus (2)","session_id":"o2-v7-b","seq":5,"event_id":"o2-v7-b-5","state":"waiting","waiting_for":"owner_input","task":"v7: откатывать PR #41 или чинить?"}
+{"agent":"Astra","session_id":"astra-1110","seq":2,"event_id":"astra-1110-2","state":"waiting","waiting_for":"model_limit","task":"Ревью clockfix","note":"лимит до 03:00"}`;
+}
+
+function forwardText(t) {
+  if (t.kind !== "forward") return t.message;
+  return `${t.message}\n\n[Agent Board] message_id: ${t.message_id}. Начав работу по этому сообщению, укажи в маркере "ack": "${t.message_id}".`;
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Plain-http pages on the phone have no Clipboard API.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  }
 }
 
 const ACTIONS = {
@@ -254,16 +328,25 @@ const ACTIONS = {
       <div class="buttons"><button data-close>OK</button></div>`);
   },
   howto() {
-    dialog("Инструкция для агентов", `<p>Отправьте этот текст каждому агенту (один раз, например в его инструкции/AGENTS.md):</p>
-      <textarea readonly id="prompt-text"></textarea>
+    const watches = data.config.watch;
+    const tabs = watches.map((w, i) => `<li role="tab" data-howto="${i}" aria-selected="${i === 0}"><a href="#">${esc(w.project || w.path)}</a></li>`).join("");
+    dialog("Инструкция для агентов", `<p>Отправьте этот текст каждому агенту проекта один раз (или попросите ведущего разослать). У каждого проекта своя папка.</p>
+      <menu role="tablist">${tabs}</menu>
+      <div class="window" role="tabpanel"><div class="window-body"><textarea readonly id="prompt-text"></textarea></div></div>
       <div class="buttons"><button id="copy-prompt">Копировать</button><button data-close>Закрыть</button></div>`,
     (node) => {
       const ta = node.querySelector("#prompt-text");
-      ta.value = agentPrompt();
+      const show = (i) => {
+        ta.value = agentPrompt(watches[i]);
+        node.querySelectorAll("[data-howto]").forEach((li) => li.setAttribute("aria-selected", li.dataset.howto === String(i)));
+      };
+      show(0);
+      node.addEventListener("click", (e) => {
+        const li = e.target.closest("[data-howto]");
+        if (li) { e.preventDefault(); e.stopPropagation(); show(Number(li.dataset.howto)); }
+      });
       node.querySelector("#copy-prompt").onclick = async (e) => {
-        ta.select();
-        try { await navigator.clipboard.writeText(ta.value); } catch { document.execCommand("copy"); }
-        e.target.textContent = "Скопировано";
+        e.target.textContent = (await copyText(ta.value)) ? "Скопировано" : "Не удалось";
       };
     });
   },
@@ -317,14 +400,37 @@ const ACTIONS = {
     if (!item) return;
     history = data.events.filter((e) => e.project === item.project && e.agent === item.agent).slice(-8).reverse();
     const kv = (k, v) => (v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : "");
-    dialog(`${item.agent} — ${item.project}`, `<dl class="kv">
-        ${kv("Состояние", STATE_LABEL[item.state])}${kv("Задача", item.task)}${kv("Кому переслать", item.to)}
-        ${kv("Заметка", item.note)}${kv("Результат", item.result)}${kv("Обновлено", item.updated && `${hhmm(item.updated)}, ${ago(item.updated)}`)}
-      </dl>
-      <div class="sunken-panel" style="max-height:180px"><table><thead><tr><th>Время</th><th>Событие</th><th>Задача</th></tr></thead><tbody>
-      ${history.map((e) => `<tr><td class="nowrap">${hhmm(e.time)}</td><td class="nowrap">${STATE_LABEL[e.state]}${e.to ? ` → ${esc(e.to)}` : ""}</td><td>${esc(e.task)}</td></tr>`).join("")}
+    const when = (iso) => iso && `${hhmm(iso)}, ${ago(iso)}`;
+    const isTodo = selected.type === "todo";
+    const head = isTodo
+      ? `${kv("Задача", item.task)}${kv("Кому переслать", item.to)}${kv("Заметка", item.note)}${kv("Результат", item.result)}
+         ${kv("message_id", item.kind === "forward" && item.message_id)}${kv("Переслано", when(item.forwarded_at))}${kv("Подтверждено", when(item.acked_at))}`
+      : `${kv("Состояние", stateLabel(item))}${kv("Этап", item.phase)}${kv("Задача", item.task)}${kv("Кому переслать", item.to)}
+         ${kv("Заметка", item.note)}${kv("Результат", item.result)}${kv("Сессия", item.session)}${kv("Обновлено", when(item.updated))}`;
+    const msg = isTodo && item.message ? `<p>Текст для пересылки:</p><textarea readonly class="msg-text"></textarea>` : "";
+    dialog(`${item.agent} — ${item.project}`, `<dl class="kv">${head}</dl>${msg}
+      <div class="sunken-panel" style="max-height:160px"><table><thead><tr><th>Время</th><th>Событие</th><th>Задача</th></tr></thead><tbody>
+      ${history.map((e) => `<tr><td class="nowrap">${hhmm(e.time)}</td><td class="nowrap">${esc(stateLabel(e))}${e.to ? ` → ${esc(e.to)}` : ""}</td><td>${esc(e.task)}</td></tr>`).join("")}
       </tbody></table></div>
-      <div class="buttons"><button data-close>OK</button></div>`);
+      <div class="buttons">${msg ? `<button data-action="copy-message">Копировать</button>` : ""}<button data-close>OK</button></div>`,
+    (node) => { const ta = node.querySelector(".msg-text"); if (ta) ta.value = forwardText(item); });
+  },
+  async "copy-message"(e) {
+    const todo = selected?.type === "todo" && data.todos.find((t) => t.id === selected.id);
+    if (!todo?.message) return;
+    const ok = await copyText(forwardText(todo));
+    const btn = e?.target?.closest("button");
+    if (btn && ok) {
+      const label = btn.querySelector("span") || btn;
+      const old = label.textContent;
+      label.textContent = "Скопировано";
+      setTimeout(() => { label.textContent = old; }, 1500);
+    } else if (!ok) {
+      alertBox("Копирование", "Браузер не дал скопировать. Откройте «Подробно» и выделите текст вручную.", "msg_warning-2");
+    }
+  },
+  "mark-forwarded"() {
+    if (selected?.type === "todo") act(`/api/todo/${selected.id}/forwarded`, {});
   },
   "done-selected"() {
     if (selected?.type === "todo") act(`/api/todo/${selected.id}/done`, {});
@@ -367,7 +473,7 @@ document.addEventListener("click", (e) => {
   if (menu) menu.classList.remove("open");
 
   const action = e.target.closest("[data-action]");
-  if (action && data) { e.preventDefault(); ACTIONS[action.dataset.action]?.(); return; }
+  if (action && data) { e.preventDefault(); ACTIONS[action.dataset.action]?.(e); return; }
 
   const t = e.target.closest("[data-tab]");
   if (t) {

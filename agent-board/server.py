@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Agent Board: watches marker folders, keeps agent statuses and reminders, serves the UI.
 
-Stdlib only. Run: python server.py  (Windows: start.bat / AgentBoard.vbs)
+Stdlib only. Run: python server.py  (Windows: install.ps1 creates shortcuts)
 """
 import json
 import os
@@ -23,8 +23,9 @@ CONFIG_FILE = DATA_DIR / "config.json"
 STATE_FILE = DATA_DIR / "state.json"
 
 STATES = {"working", "waiting", "done", "blocked", "idle"}
-NOTIFY_STATES = {"done", "waiting", "blocked"}
+WAITING_FOR = {"owner_input", "owner_forward", "reviewer", "coordinator_review", "resource", "model_limit"}
 MAX_EVENTS = 500
+SEEN_IDS = 3000
 POLL_SECONDS = 1.5
 # A marker that is still unparsable after this long is moved to bad/ instead of retried.
 PARTIAL_WRITE_GRACE = 10
@@ -67,8 +68,14 @@ state = load_json(STATE_FILE, {})
 state.setdefault("agents", {})
 state.setdefault("todos", [])
 state.setdefault("events", [])
+state.setdefault("seen_ids", [])
 state.setdefault("next_id", 1)
 state["version"] = state.get("version", 0) + 1
+for _t in state["todos"]:
+    _t.setdefault("forwarded_at", None)
+    _t.setdefault("acked_at", None)
+    _t.setdefault("message_id", f"AB-{_t['id']}")
+    _t.setdefault("message", "")
 
 
 def save_state():
@@ -112,80 +119,161 @@ def clean(value, limit=500):
     return str(value).strip()[:limit] if value is not None else ""
 
 
-def parse_marker(raw, default_project, mtime):
+def parse_marker(raw, folder_project, mtime):
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("marker must be a JSON object")
+    try:
+        seq = int(data["seq"]) if data.get("seq") is not None else None
+    except (TypeError, ValueError):
+        seq = None
     ev = {
-        "project": clean(data.get("project") or default_project, 60),
+        # The folder decides the project: an agent's cwd is not a reliable project identity.
+        "project": clean(folder_project or data.get("project"), 60),
         "agent": clean(data.get("agent"), 60),
         "state": clean(data.get("state"), 20).lower(),
+        "waiting_for": clean(data.get("waiting_for"), 40).lower(),
+        "phase": clean(data.get("phase"), 60),
         "task": clean(data.get("task")),
         "to": clean(data.get("to"), 60),
         "note": clean(data.get("note"), 1000),
         "result": clean(data.get("result"), 400),
+        "message": clean(data.get("message"), 20000),
+        "message_id": clean(data.get("message_id"), 80),
+        "ack": clean(data.get("ack"), 80),
+        "needs_forward": data.get("needs_forward") is True,
+        "session": clean(data.get("session_id"), 80),
+        "seq": seq,
+        "event_id": clean(data.get("event_id"), 120),
         "time": clean(data.get("time"), 40) or datetime.fromtimestamp(mtime).astimezone().isoformat(timespec="seconds"),
+        "received": now_iso(),
     }
     if not ev["project"] or not ev["agent"]:
         raise ValueError("project and agent are required")
     if ev["state"] not in STATES:
         raise ValueError(f"state must be one of {sorted(STATES)}")
+    if ev["waiting_for"] and ev["waiting_for"] not in WAITING_FOR:
+        raise ValueError(f"waiting_for must be one of {sorted(WAITING_FOR)}")
     return ev
 
 
-def open_todo(kind, ev):
-    for t in state["todos"]:
-        if t["done_at"] is None and t["kind"] == kind and t["project"] == ev["project"] and t["agent"] == ev["agent"]:
-            if kind != "forward" or (t["task"] == ev["task"] and t["to"] == ev["to"]):
-                return t
+def same_agent(t, project, agent):
+    return t["project"] == project and t["agent"].casefold() == agent.casefold()
+
+
+def forward_kind(ev):
+    if not ev["to"]:
+        return False
+    return ev["state"] == "done" or ev["needs_forward"] or ev["waiting_for"] in ("owner_forward", "coordinator_review", "reviewer")
+
+
+def todo_kind(ev):
+    if forward_kind(ev):
+        return "forward"
+    if ev["state"] == "blocked":
+        return "blocked"
+    if ev["state"] == "waiting" and ev["waiting_for"] == "model_limit":
+        return "limit"
+    if ev["state"] == "waiting" and ev["waiting_for"] in ("", "owner_input"):
+        return "reply"
     return None
+
+
+def default_message(ev):
+    lines = [f"{ev['agent']} ({ev['project']}): {ev['task'] or 'работа завершена'}"]
+    if ev["note"]:
+        lines.append(ev["note"])
+    if ev["result"]:
+        lines.append(f"Результат: {ev['result']}")
+    return "\n".join(lines)
+
+
+def acknowledge(ev):
+    """Close forward reminders addressed to this agent that this event confirms."""
+    for t in state["todos"]:
+        if t["kind"] != "forward" or t["acked_at"] or t["project"] != ev["project"]:
+            continue
+        if t["to"].casefold() != ev["agent"].casefold():
+            continue
+        explicit = ev["ack"] and ev["ack"] == t["message_id"]
+        implicit = not ev["ack"] and ev["state"] == "working" and t["forwarded_at"] and ev["task"] and ev["task"] == t["task"]
+        if explicit or implicit:
+            t["acked_at"] = ev["time"]
+            t["done_at"] = t["done_at"] or ev["received"]
+            t["forwarded_at"] = t["forwarded_at"] or ev["received"]
 
 
 def apply_event(ev):
     key = f'{ev["project"]}/{ev["agent"]}'
     agents = state["agents"]
     agent = agents.get(key) or {"project": ev["project"], "agent": ev["agent"], "first_seen": ev["time"]}
-    agent.update({k: ev[k] for k in ("state", "task", "to", "note", "result")})
-    agent["updated"] = ev["time"]
-    agents[key] = agent
 
     state["events"].append(ev)
     del state["events"][:-MAX_EVENTS]
+    acknowledge(ev)
 
-    # The agent moved on, so any pending "reply to me" reminder is resolved.
+    # An older event of the same session (delivered late over SMB) must not overwrite newer status.
+    if ev["session"] and ev["seq"] is not None and agent.get("session") == ev["session"] \
+            and agent.get("seq") is not None and ev["seq"] <= agent["seq"]:
+        return
+    for k in ("state", "waiting_for", "phase", "task", "to", "note", "result", "session", "seq"):
+        agent[k] = ev[k]
+    agent["updated"] = ev["time"]
+    agent["received"] = ev["received"]
+    agents[key] = agent
+
+    # The agent moved on, so its own "needs your answer" reminders are resolved.
     if ev["state"] not in ("waiting", "blocked"):
         for t in state["todos"]:
-            if t["done_at"] is None and t["kind"] in ("reply", "blocked") and t["project"] == ev["project"] and t["agent"] == ev["agent"]:
-                t["done_at"] = ev["time"]
+            if t["done_at"] is None and t["kind"] in ("reply", "blocked", "limit") and same_agent(t, ev["project"], ev["agent"]):
+                t["done_at"] = ev["received"]
                 t["auto"] = True
 
-    kind = {"done": "forward" if ev["to"] else None, "waiting": "reply", "blocked": "blocked"}.get(ev["state"])
+    kind = todo_kind(ev)
     if kind:
-        existing = open_todo(kind, ev)
-        if existing:
-            existing.update({"task": ev["task"], "note": ev["note"], "result": ev["result"], "created": ev["time"]})
-        else:
-            state["todos"].append({
-                "id": state["next_id"], "kind": kind, "project": ev["project"], "agent": ev["agent"],
-                "to": ev["to"], "task": ev["task"], "note": ev["note"], "result": ev["result"],
-                "created": ev["time"], "done_at": None, "auto": False,
-            })
+        message = ev["message"] or default_message(ev)
+        existing = next((t for t in state["todos"] if t["done_at"] is None and t["kind"] == kind
+                         and same_agent(t, ev["project"], ev["agent"])
+                         and (kind != "forward" or (t["task"] == ev["task"] and t["to"] == ev["to"]))), None)
+        if existing and not existing["forwarded_at"]:
+            existing.update({"note": ev["note"], "result": ev["result"], "created": ev["time"],
+                             "waiting_for": ev["waiting_for"], "message": message,
+                             "message_id": ev["message_id"] or existing["message_id"]})
+        elif not existing:
+            todo_id = state["next_id"]
             state["next_id"] += 1
-    # Closed reminders older than the event log are dropped to keep state small.
-    open_or_recent = [t for t in state["todos"] if t["done_at"] is None]
-    closed = [t for t in state["todos"] if t["done_at"] is not None][-100:]
-    state["todos"] = sorted(open_or_recent + closed, key=lambda t: t["id"])
+            state["todos"].append({
+                "id": todo_id, "kind": kind, "project": ev["project"], "agent": ev["agent"],
+                "to": ev["to"], "task": ev["task"], "note": ev["note"], "result": ev["result"],
+                "waiting_for": ev["waiting_for"], "message": message,
+                "message_id": ev["message_id"] or f"AB-{todo_id}",
+                "created": ev["time"], "forwarded_at": None, "acked_at": None, "done_at": None, "auto": False,
+            })
+    open_todos = [t for t in state["todos"] if t["done_at"] is None]
+    closed = sorted((t for t in state["todos"] if t["done_at"] is not None), key=lambda t: t["done_at"])[-100:]
+    state["todos"] = sorted(open_todos + closed, key=lambda t: t["id"])
 
-    if ev["state"] in NOTIFY_STATES:
-        who = f'{ev["agent"]} ({ev["project"]})'
-        if ev["state"] == "done":
-            title = f"{who} закончил"
-            body = ev["task"] + (f"\nПереслать: {ev['to']}" if ev["to"] else "")
-        elif ev["state"] == "waiting":
-            title, body = f"{who} ждёт ответа", ev["task"] or ev["note"]
-        else:
-            title, body = f"{who} заблокирован", ev["note"] or ev["task"]
-        notify(title, body.strip() or " ")
+    who = f'{ev["agent"]} ({ev["project"]})'
+    if kind == "forward":
+        notify(f"{who}: переслать → {ev['to']}", ev["task"] or ev["note"] or " ")
+    elif kind == "reply":
+        notify(f"{who} ждёт вашего ответа", ev["task"] or ev["note"] or " ")
+    elif kind == "blocked":
+        notify(f"{who} заблокирован", ev["note"] or ev["task"] or " ")
+    elif kind == "limit":
+        notify(f"{who}: закончился лимит модели", ev["note"] or ev["task"] or " ")
+    elif ev["state"] == "done":
+        notify(f"{who} закончил", ev["task"] or " ")
+
+
+def archive(f, folder, sub):
+    target = folder / sub / datetime.now().strftime("%Y-%m-%d")
+    target.mkdir(parents=True, exist_ok=True)
+    dest = target / f.name
+    if dest.exists():
+        dest = target / f"{f.stem}-{secrets.token_hex(3)}{f.suffix}"
+    os.replace(f, dest)
+    return dest
 
 
 def scan_once():
@@ -206,19 +294,22 @@ def scan_once():
                 continue
             except (OSError, ValueError) as e:
                 if time.time() - mtime > PARTIAL_WRITE_GRACE:
-                    bad = folder / "bad"
-                    bad.mkdir(exist_ok=True)
                     try:
-                        os.replace(f, bad / f.name)
-                        (bad / (f.name + ".error.txt")).write_text(str(e), encoding="utf-8")
+                        dest = archive(f, folder, "bad")
+                        dest.with_name(dest.name + ".error.txt").write_text(str(e), encoding="utf-8")
                     except OSError:
                         pass
                 continue
             try:
-                f.unlink()
+                archive(f, folder, "processed")
             except OSError:
                 continue  # still locked by the writer; pick it up next round
             with lock:
+                if ev["event_id"] and ev["event_id"] in state["seen_ids"]:
+                    continue
+                if ev["event_id"]:
+                    state["seen_ids"].append(ev["event_id"])
+                    del state["seen_ids"][:-SEEN_IDS]
                 apply_event(ev)
                 changed = True
     if changed:
@@ -294,6 +385,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload["config"] = {"stale_minutes": config["stale_minutes"], "notify": config["notify"],
                                      "watch": config["watch"], "lan": config["lan"]}
                 payload["server_time"] = now_iso()
+                payload["host"] = socket.gethostname()
             self.send_json(payload)
             return
         if url.path == "/api/pairing":
@@ -320,12 +412,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         parts = url.path.strip("/").split("/")
         with lock:
-            if parts[:2] == ["api", "todo"] and len(parts) == 4 and parts[3] in ("done", "undo"):
+            if parts[:2] == ["api", "todo"] and len(parts) == 4 and parts[3] in ("forwarded", "done", "undo"):
                 todo = next((t for t in state["todos"] if str(t["id"]) == parts[2]), None)
                 if not todo:
                     self.send_json({"error": "not found"}, 404)
                     return
-                todo["done_at"] = now_iso() if parts[3] == "done" else None
+                if parts[3] == "forwarded":
+                    # Owner's own mark: the app cannot see a paste into another window.
+                    todo["forwarded_at"] = todo["forwarded_at"] or now_iso()
+                elif parts[3] == "done":
+                    todo["done_at"] = now_iso()
+                else:
+                    todo["done_at"] = None
+                    todo["forwarded_at"] = None
+                    todo["acked_at"] = None
                 todo["auto"] = False
             elif url.path == "/api/agent/forget":
                 state["agents"].pop(f'{body.get("project")}/{body.get("agent")}', None)
