@@ -35,7 +35,8 @@ let project = localStorage.getItem("ab.project") || "*";
 let tab = localStorage.getItem("ab.view") === "log" ? "log" : "agents";
 let selected = null; // {type: "todo"|"agent", id}
 let showClosed = localStorage.getItem("ab.closed") === "1";
-let soundOn = localStorage.getItem("ab.sound") !== null ? localStorage.getItem("ab.sound") === "1" : !isLocal;
+let soundOn = localStorage.getItem("ab.sound") !== "0";
+let appVolume = Number(localStorage.getItem("ab.volume") ?? 70);
 let seenAlerts = null;
 let online = true;
 
@@ -199,7 +200,8 @@ function renderTodos() {
 // --- alerts on this device ------------------------------------------------------
 
 let audioCtx = null;
-function chime() {
+function chime(volume = appVolume) {
+  if (volume <= 0) return;
   try {
     audioCtx = audioCtx || new AudioContext();
     const t0 = audioCtx.currentTime;
@@ -209,7 +211,7 @@ function chime() {
       o.type = "triangle";
       o.frequency.value = f;
       g.gain.setValueAtTime(0.0001, t0 + dt);
-      g.gain.exponentialRampToValueAtTime(0.3, t0 + dt + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.4 * volume / 100, t0 + dt + 0.02);
       g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.5);
       o.connect(g).connect(audioCtx.destination);
       o.start(t0 + dt);
@@ -222,7 +224,8 @@ document.addEventListener("pointerdown", () => { if (audioCtx?.state === "suspen
 
 function checkAlerts() {
   const ids = new Set(data.todos.filter(needsAction).map((t) => `${t.id}:${t.created}`));
-  if (seenAlerts && soundOn && !isNative && [...ids].some((id) => !seenAlerts.has(id))) chime();
+  // On the PC the popups have their own sound; the window chimes only when popups are off.
+  if (seenAlerts && soundOn && (!isNative || !data.config.notify) && [...ids].some((id) => !seenAlerts.has(id))) chime();
   seenAlerts = ids;
 }
 
@@ -478,14 +481,50 @@ const ACTIONS = {
     render();
   },
   "toggle-sound"() {
-    // The desktop app plays its own popup sound; there the button controls that instead.
-    if (isNative) { ACTIONS["toggle-popup-sound"](); return; }
     soundOn = !soundOn;
     localStorage.setItem("ab.sound", soundOn ? "1" : "0");
     if (soundOn) chime();
     render();
   },
   "toggle-popup-sound"() { act("/api/config", { popup_sound: !data.config.popup_sound }); },
+  volume() {
+    // Laid out like the Windows 98 "Volume Control": one column per sound, vertical slider + mute.
+    const column = (id, title, hint, value, muted) => `
+      <div class="vol-col">
+        <b>${title}</b>
+        <div class="vol-hint">${hint}</div>
+        <div class="vol-label">Громкость:</div>
+        <div class="vol-slider"><input type="range" id="${id}-range" min="0" max="100" step="5" value="${value}" class="has-box-indicator" aria-label="${title}"></div>
+        <div class="vol-value" id="${id}-value">${value}%</div>
+        <input type="checkbox" id="${id}-mute"${muted ? " checked" : ""}><label for="${id}-mute">Выкл.</label>
+      </div>`;
+    dialog("Громкость", `<div class="vol-panel">
+        ${column("vol-popup", "Уведомления", "всплывающие окна на ПК", data.config.popup_volume ?? 80, data.config.popup_sound === false)}
+        ${column("vol-app", "Приложение", isNative ? "окно Agent Board" : "это устройство", appVolume, !soundOn)}
+      </div>
+      <div class="buttons"><button data-close>Закрыть</button></div>`,
+    (node) => {
+      const bind = (id, onChange) => {
+        const range = node.querySelector(`#${id}-range`);
+        const mute = node.querySelector(`#${id}-mute`);
+        range.addEventListener("input", () => { node.querySelector(`#${id}-value`).textContent = `${range.value}%`; });
+        range.addEventListener("change", () => onChange(Number(range.value), mute.checked, !mute.checked));
+        mute.addEventListener("change", () => onChange(Number(range.value), mute.checked, !mute.checked));
+      };
+      bind("vol-popup", async (v, muted, preview) => {
+        await act("/api/config", { popup_volume: v, popup_sound: !muted });
+        if (preview) native()?.test_sound(v);
+      });
+      bind("vol-app", (v, muted, preview) => {
+        appVolume = v;
+        soundOn = !muted;
+        localStorage.setItem("ab.volume", String(v));
+        localStorage.setItem("ab.sound", muted ? "0" : "1");
+        if (preview) chime(v);
+        render();
+      });
+    });
+  },
   "toggle-notify"() { act("/api/config", { notify: !data.config.notify }); },
   "toggle-closed"() {
     showClosed = !showClosed;
@@ -591,6 +630,42 @@ $("#resize-grip").addEventListener("pointerdown", (e) => {
   grip.addEventListener("pointermove", move);
   grip.addEventListener("pointerup", up);
 });
+
+// Splitter between "Нужно сделать" and the agents/log panel; the height is remembered per device.
+(() => {
+  const panel = $(".todo-panel");
+  const splitter = $("#splitter");
+  const apply = (h) => {
+    if (!h) { panel.style.height = ""; panel.style.maxHeight = ""; return; }
+    panel.style.height = `${h}px`;
+    panel.style.maxHeight = "none";
+  };
+  apply(Number(localStorage.getItem("ab.todoHeight")) || 0);
+  splitter.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    splitter.setPointerCapture(e.pointerId);
+    splitter.classList.add("dragging");
+    const startY = e.clientY;
+    const startH = panel.offsetHeight;
+    const room = $(".project-window > .window-body").clientHeight;
+    const move = (ev) => {
+      const h = Math.round(Math.max(40, Math.min(room - 120, startH + ev.clientY - startY)));
+      apply(h);
+      localStorage.setItem("ab.todoHeight", String(h));
+    };
+    const up = () => {
+      splitter.classList.remove("dragging");
+      splitter.removeEventListener("pointermove", move);
+      splitter.removeEventListener("pointerup", up);
+    };
+    splitter.addEventListener("pointermove", move);
+    splitter.addEventListener("pointerup", up);
+  });
+  splitter.addEventListener("dblclick", () => {
+    localStorage.removeItem("ab.todoHeight");
+    apply(0);
+  });
+})();
 
 // Called by the desktop app when "Открыть" is pressed in a popup.
 window.abFocus = (proj, todoId) => {
