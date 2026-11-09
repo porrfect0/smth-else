@@ -3,8 +3,15 @@
 $ErrorActionPreference = 'Stop'
 $app = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-$python = (Get-Command python -ErrorAction SilentlyContinue).Source
-if (-not $python) { throw 'Python 3 not found in PATH' }
+# Resolve a real interpreter: `python` in PATH is often the Microsoft Store stub.
+$python = $null
+foreach ($cmd in @(@('py', '-3'), @('python'))) {
+    if (Get-Command $cmd[0] -ErrorAction SilentlyContinue) {
+        $exe = & $cmd[0] @($cmd[1..9] | Where-Object { $_ }) -c 'import sys; print(sys.executable)' 2>$null
+        if ($LASTEXITCODE -eq 0 -and $exe -and (Test-Path $exe)) { $python = $exe.Trim(); break }
+    }
+}
+if (-not $python) { throw 'Python 3 not found: install it from python.org' }
 $pythonw = Join-Path (Split-Path $python) 'pythonw.exe'
 if (-not (Test-Path $pythonw)) { $pythonw = $python }
 
