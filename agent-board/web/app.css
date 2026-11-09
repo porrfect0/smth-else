@@ -1,12 +1,33 @@
 html, body { height: 100%; margin: 0; }
+/* "only light" opts out of Chromium auto dark mode, which repainted text near-white on the user's PC. */
+:root { color-scheme: only light; }
 body {
   background: #008080;
+  color: #000;
   font-family: "Pixelated MS Sans Serif", Arial, sans-serif;
   font-size: 11px;
   overflow: hidden;
 }
+input, textarea, select { color: #000; }
 img { image-rendering: pixelated; }
 .hidden { display: none !important; }
+
+/* Frameless desktop window: the Win98 window is the whole OS window. */
+.native-only { display: none !important; }
+body.native .native-only { display: block !important; }
+body.native .web-only { display: none !important; }
+body.native { background: silver; }
+body.native .main-window { inset: 0; }
+body.native .title-bar-text { flex: 1; cursor: default; user-select: none; }
+.resize-grip {
+  position: absolute; right: 1px; bottom: 1px; width: 13px; height: 13px; cursor: nwse-resize;
+  background:
+    linear-gradient(135deg, transparent 0 45%, #fff 45% 52%, #808080 52% 60%, transparent 60% 66%,
+      #fff 66% 72%, #808080 72% 80%, transparent 80% 86%, #fff 86% 92%, #808080 92%);
+}
+body.maximized .resize-grip { display: none !important; }
+.status-bar { position: relative; }
+body.native .status-bar { padding-right: 16px; }
 
 .main-window {
   position: absolute; inset: 12px;
@@ -67,7 +88,7 @@ td .sub { color: #555; }
 table.interactive > tbody > tr.highlighted td .sub { color: #ddd; }
 td.task { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 tr.closed td { color: #808080; text-decoration: line-through; }
-tr.pending td { color: #555; }
+tr.pending td { color: #333; }
 table.interactive > tbody > tr.highlighted td { color: #fff; }
 .dialog textarea.msg-text { height: 110px; }
 .dialog menu[role=tablist] { margin: 8px 0 0; }

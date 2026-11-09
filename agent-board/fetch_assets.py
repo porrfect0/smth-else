@@ -53,6 +53,22 @@ def main():
             sys.exit(f"icon {n}: not a PNG")
         (icons / f"{n}.png").write_bytes(png)
     print(f"icons: {len(ICONS)} ok ({len(missing)} downloaded)")
+    write_ico(icons / "app.ico", [icons / "network_normal_two_pcs-1.png", icons / "network_normal_two_pcs-0.png"])
+
+
+def write_ico(path, pngs):
+    """Windows .ico (window/shortcut icon) from PNG images; ICO may embed PNG data as is."""
+    import struct
+
+    images = [p.read_bytes() for p in pngs]
+    header = struct.pack("<HHH", 0, 1, len(images))
+    offset = 6 + 16 * len(images)
+    entries = b""
+    for img in images:
+        w, h = struct.unpack(">II", img[16:24])
+        entries += struct.pack("<BBBBHHII", w % 256, h % 256, 0, 0, 1, 32, len(img), offset)
+        offset += len(img)
+    path.write_bytes(header + entries + b"".join(images))
 
 
 if __name__ == "__main__":

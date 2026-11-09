@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="only light">
 <title>Agent Board</title>
 <link rel="icon" href="icons/network_normal_two_pcs-1.png">
 <link rel="stylesheet" href="vendor/98.css">
@@ -11,9 +12,12 @@
 <body>
 <div class="window main-window">
   <div class="title-bar">
-    <div class="title-bar-text"><img src="icons/network_normal_two_pcs-1.png" alt="">Agent Board</div>
+    <div class="title-bar-text pywebview-drag-region" id="title-text"><img src="icons/network_normal_two_pcs-1.png" alt="">Agent Board</div>
     <div class="title-bar-controls">
-      <button aria-label="Help" data-action="about"></button>
+      <button aria-label="Help" data-action="about" class="web-only"></button>
+      <button aria-label="Minimize" data-action="win-min" class="native-only"></button>
+      <button aria-label="Maximize" data-action="win-max" class="native-only" id="win-max"></button>
+      <button aria-label="Close" data-action="win-close" class="native-only"></button>
     </div>
   </div>
 
@@ -92,6 +96,7 @@
     <p class="status-bar-field" id="sb-main">Загрузка…</p>
     <p class="status-bar-field" id="sb-counts"></p>
     <p class="status-bar-field" id="sb-time"></p>
+    <div class="resize-grip native-only" id="resize-grip"></div>
   </div>
 </div>
 

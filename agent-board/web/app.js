@@ -125,7 +125,11 @@ function render() {
   $("#sb-main").textContent = online ? (open ? `Нужно сделать: ${open}` : "Всё под контролем") : "Нет связи с Agent Board на ПК";
   $("#sb-counts").textContent = `Агентов: ${agents.length} · работают: ${count("working")} · ждут: ${count("waiting")}`;
   $("#sb-time").textContent = `Обновлено ${new Date().toLocaleTimeString("ru-RU")}`;
-  document.title = open ? `(${open}) Agent Board` : "Agent Board";
+  const title = open ? `(${open}) Agent Board` : "Agent Board";
+  if (document.title !== title) {
+    document.title = title;
+    native()?.set_title(title);
+  }
 
   $("#sound-check").classList.toggle("on", soundOn);
   $("#notify-check").classList.toggle("on", !!data.config.notify);
@@ -490,6 +494,7 @@ document.addEventListener("click", (e) => {
   if (todoRow || agentRow) applySelection();
 });
 document.addEventListener("dblclick", (e) => {
+  if (e.target.closest("#title-text")) { ACTIONS["win-max"](); return; }
   if (selected && e.target.closest("tr[data-todo], tr[data-agent]")) ACTIONS.details();
 });
 document.addEventListener("mouseover", (e) => {
@@ -503,6 +508,52 @@ document.addEventListener("mouseover", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { $("#modal-layer").classList.add("hidden"); $("#modal-layer").innerHTML = ""; }
   if (e.key === "Delete" && selected?.type === "todo") ACTIONS["done-selected"]();
+});
+
+// --- frameless desktop window (launch.pyw opens the page with #native) -----------
+
+const isNative = location.hash.includes("native");
+document.body.classList.toggle("native", isNative);
+const native = () => (isNative && window.pywebview?.api) || null;
+
+Object.assign(ACTIONS, {
+  "win-min"() { native()?.minimize(); },
+  async "win-max"() {
+    const api = native();
+    if (!api) return;
+    const maximized = await api.toggle_maximize();
+    $("#win-max").setAttribute("aria-label", maximized ? "Restore" : "Maximize");
+    document.body.classList.toggle("maximized", !!maximized);
+  },
+  "win-close"() { native()?.close(); },
+});
+
+$("#resize-grip").addEventListener("pointerdown", (e) => {
+  const api = native();
+  if (!api || document.body.classList.contains("maximized")) return;
+  e.preventDefault();
+  const grip = e.currentTarget;
+  grip.setPointerCapture(e.pointerId);
+  const start = { x: e.screenX, y: e.screenY, w: window.innerWidth, h: window.innerHeight };
+  let pending = null;
+  let busy = false;
+  const flush = async () => {
+    if (busy || !pending) return;
+    busy = true;
+    const size = pending;
+    pending = null;
+    try { await api.resize(size.w, size.h); } finally { busy = false; flush(); }
+  };
+  const move = (ev) => {
+    pending = { w: start.w + ev.screenX - start.x, h: start.h + ev.screenY - start.y };
+    flush();
+  };
+  const up = () => {
+    grip.removeEventListener("pointermove", move);
+    grip.removeEventListener("pointerup", up);
+  };
+  grip.addEventListener("pointermove", move);
+  grip.addEventListener("pointerup", up);
 });
 
 poll();

@@ -18,13 +18,17 @@ if (-not (Test-Path $pythonw)) { $pythonw = $python }
 & $python (Join-Path $app 'fetch_assets.py')
 if ($LASTEXITCODE -ne 0) { throw 'fetch_assets.py failed' }
 
+# Frameless WebView2 window; without it launch.pyw falls back to a browser app window.
+& $python -m pip install --user --quiet --disable-pip-version-check pywebview
+if ($LASTEXITCODE -ne 0) { Write-Warning 'pywebview not installed: the window will open in a browser' }
+
 $shell = New-Object -ComObject WScript.Shell
 function New-Shortcut($path, $arguments) {
     $s = $shell.CreateShortcut($path)
     $s.TargetPath = $pythonw
     $s.Arguments = "`"$(Join-Path $app 'launch.pyw')`" $arguments"
     $s.WorkingDirectory = $app
-    $s.IconLocation = "$env:SystemRoot\System32\imageres.dll,20"
+    $s.IconLocation = Join-Path $app 'web\icons\app.ico'
     $s.Description = 'Agent Board'
     $s.Save()
 }
