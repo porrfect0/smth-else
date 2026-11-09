@@ -19,7 +19,7 @@ if (-not (Test-Path $pythonw)) { $pythonw = $python }
 if ($LASTEXITCODE -ne 0) { throw 'fetch_assets.py failed' }
 
 # Frameless WebView2 window; without it launch.pyw falls back to a browser app window.
-& $python -m pip install --user --quiet --disable-pip-version-check pywebview
+& $python -m pip install --user --quiet --disable-pip-version-check --no-warn-script-location pywebview
 if ($LASTEXITCODE -ne 0) { Write-Warning 'pywebview not installed: the window will open in a browser' }
 
 $shell = New-Object -ComObject WScript.Shell
