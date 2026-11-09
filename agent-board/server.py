@@ -276,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def send_json(self, data, code=200):
-        self.send(code, json.dumps(data, ensure_ascii=False).encode())
+        self.send(code, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
