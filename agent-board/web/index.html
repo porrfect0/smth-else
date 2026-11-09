@@ -36,7 +36,9 @@
     <div class="menu" data-menu>
       <span class="menu-label"><u>В</u>ид</span>
       <div class="menu-list">
-        <div class="menu-item web-only" data-action="toggle-sound"><span class="check" id="sound-check"></span>Звук на этом устройстве</div>
+        <div class="menu-item" data-action="volume"><img src="icons/loudspeaker_rays-1.png" alt="">Громкость…</div>
+        <hr>
+        <div class="menu-item" data-action="toggle-sound"><span class="check" id="sound-check"></span>Звук приложения</div>
         <div class="menu-item" data-action="toggle-notify"><span class="check" id="notify-check"></span>Всплывающие окна на ПК</div>
         <div class="menu-item" data-action="toggle-popup-sound"><span class="check" id="popup-sound-check"></span>Звук всплывающих окон</div>
         <div class="menu-item" data-action="toggle-closed"><span class="check" id="closed-check"></span>Показывать выполненные</div>
@@ -61,7 +63,7 @@
     <button class="tool" data-action="forget" id="tb-forget" title="Убрать"><img src="icons/recycle_bin_full-0.png" alt=""><span>Убрать</span></button>
     <span class="tool-sep"></span>
     <button class="tool" data-action="pair" title="Телефон"><img src="icons/world-0.png" alt=""><span>Телефон</span></button>
-    <button class="tool" data-action="toggle-sound" title="Звук"><img id="tb-sound" src="icons/loudspeaker_rays-0.png" alt=""><span>Звук</span></button>
+    <button class="tool" data-action="volume" title="Громкость"><img id="tb-sound" src="icons/loudspeaker_rays-0.png" alt=""><span>Звук</span></button>
     <button class="tool" data-action="howto" title="Агентам"><img src="icons/help_book_small-0.png" alt=""><span>Агентам</span></button>
   </div>
 
@@ -79,6 +81,7 @@
         <div class="empty" id="todo-empty"><img src="icons/check-0.png" alt="">Всё переслано, никто не ждёт ответа.</div>
       </div>
     </fieldset>
+    <div class="splitter" id="splitter" title="Потяните, чтобы изменить высоту (двойной щелчок — сброс)"></div>
 
     <menu role="tablist" id="tabs"></menu>
     <div class="window tab-window" role="tabpanel">

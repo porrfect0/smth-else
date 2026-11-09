@@ -82,9 +82,10 @@ def chromium_browser():
 
 # --- popup sound ---------------------------------------------------------------------
 
-def popup_sound_file():
+def popup_sound_file(volume):
     """A short strummed chord in the spirit of Win98 sounds (synthesized, not Microsoft's file)."""
-    path = DATA_DIR / "popup.wav"
+    volume = max(0, min(100, int(volume)))
+    path = DATA_DIR / f"popup-v{volume}.wav"
     if path.exists():
         return path
     rate, length = 22050, 0.7
@@ -98,7 +99,7 @@ def popup_sound_file():
                 dt = t - start
                 env = math.exp(-dt * 5.5) * min(1.0, dt * 400)
                 v += env * (math.sin(2 * math.pi * freq * dt) + 0.3 * math.sin(4 * math.pi * freq * dt))
-        frames += struct.pack("<h", int(max(-1.0, min(1.0, v * 0.22)) * 32767))
+        frames += struct.pack("<h", int(max(-1.0, min(1.0, v * 0.25 * volume / 100)) * 32767))
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
@@ -107,11 +108,13 @@ def popup_sound_file():
     return path
 
 
-def play_popup_sound():
+def play_popup_sound(volume=80):
     try:
         import winsound
 
-        winsound.PlaySound(str(popup_sound_file()), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        if volume <= 0:
+            return
+        winsound.PlaySound(str(popup_sound_file(volume)), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
     except (ImportError, RuntimeError, OSError):
         pass
 
@@ -172,6 +175,9 @@ class WindowApi:
     def quit(self):
         self._desktop.quit()
 
+    def test_sound(self, volume):
+        play_popup_sound(int(volume))
+
 
 class PopupApi:
     def __init__(self, desktop, alert):
@@ -204,6 +210,7 @@ class Desktop:
             frameless=True, easy_drag=False, background_color="#C0C0C0", text_select=True, hidden=hidden,
         )
         self.main.events.closing += self.on_main_closing
+        self.main.events.shown += lambda: square_corners(hwnd_of(self.main))
 
     def on_main_closing(self):
         if self.quitting:
@@ -235,7 +242,7 @@ class Desktop:
         y = work.bottom / scale - (POPUP_H + POPUP_GAP) * (slot + 1)
         return int(x), int(y)
 
-    def show_popup(self, alert, sound):
+    def show_popup(self, alert, sound, volume):
         with self.lock:
             if len(self.popups) >= MAX_POPUPS:
                 oldest = min(self.popups)
@@ -253,7 +260,7 @@ class Desktop:
             win.events.closed += lambda: self.forget_popup(win)
             self.popups[slot] = win
         if sound:
-            play_popup_sound()
+            play_popup_sound(volume)
 
     def close_popup(self, win):
         self.forget_popup(win)
@@ -280,13 +287,28 @@ class Desktop:
             for alert in d["alerts"]:
                 after = max(after, alert["id"])
                 try:
-                    self.show_popup(alert, d.get("sound", True))
+                    self.show_popup(alert, d.get("sound", True), d.get("volume", 80))
                 except Exception as e:  # one broken popup must not stop the loop
                     print("popup failed:", e, file=sys.stderr)
             if d["show"]["seq"] != show_seq:
                 show_seq = d["show"]["seq"]
                 self.show_main(d["show"].get("todo"), d["show"].get("project"))
             time.sleep(1.5)
+
+
+def hwnd_of(window):
+    from ctypes import wintypes
+
+    return wintypes.HWND(window.native.Handle.ToInt64())
+
+
+def square_corners(hwnd):
+    """Win98 windows are square: opt out of Windows 11 rounded corners (no-op on Windows 10)."""
+    pref = ctypes.c_int(1)  # DWMWCP_DONOTROUND
+    try:
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+    except OSError:
+        pass
 
 
 def fix_popup(window, x, y):
@@ -300,7 +322,8 @@ def fix_popup(window, x, y):
     user32 = ctypes.windll.user32
     user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                                     ctypes.c_int, ctypes.c_int, wintypes.UINT]
-    hwnd = wintypes.HWND(window.native.Handle.ToInt64())
+    hwnd = hwnd_of(window)
+    square_corners(hwnd)
     scale = user32.GetDpiForWindow(hwnd) / 96 if hasattr(user32, "GetDpiForWindow") else 1
     user32.ShowWindow(hwnd, 0)  # SW_HIDE: the taskbar only drops the button for a hidden window
     ex = user32.GetWindowLongW(hwnd, -20)
