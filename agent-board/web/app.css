@@ -96,7 +96,25 @@ table.interactive > tbody > tr.highlighted td { color: #fff; }
 tr.stale td.state { color: #800000; }
 b.to { font-weight: bold; }
 
-.todo-box { flex: none; margin: 0 0 8px; min-width: 0; }
+.todo-box { flex: none; margin: 0; min-width: 0; }
+.splitter {
+  flex: none; height: 8px; margin: 1px 0 3px; cursor: row-resize; touch-action: none;
+  background: linear-gradient(#fff, #fff) center 3px / 40px 1px no-repeat,
+              linear-gradient(#808080, #808080) center 4px / 40px 1px no-repeat;
+}
+.splitter:hover, .splitter.dragging { background-color: #b0b0b0; }
+
+/* Volume dialog (Windows 98 "Volume Control" layout) */
+.vol-panel { display: flex; gap: 0; }
+.vol-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 14px 8px; }
+.vol-col + .vol-col { border-left: 1px solid #808080; box-shadow: inset 1px 0 #fff; }
+.vol-hint { color: #444; font-size: 11px; text-align: center; min-height: 28px; }
+.vol-label { align-self: flex-start; margin-top: 6px; }
+.vol-slider { position: relative; height: 150px; width: 40px; }
+/* A rotated horizontal slider: the 98.css box thumb then reads as the Win98 vertical bar. */
+.vol-slider input { position: absolute; width: 150px; left: 50%; top: 50%; margin: 0; transform: translate(-50%, -50%) rotate(-90deg); }
+.vol-value { min-width: 36px; text-align: center; }
+.dialog:has(.vol-panel) { width: 320px; }
 .todo-panel { height: 128px; }
 .empty { display: flex; align-items: center; gap: 8px; padding: 10px; color: #444; }
 .empty img { width: 32px; height: 32px; }

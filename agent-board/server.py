@@ -34,6 +34,7 @@ DEFAULT_CONFIG = {
     "lan": True,
     "notify": True,
     "popup_sound": True,
+    "popup_volume": 80,
     "stale_minutes": 90,
     "watch": [{"path": str(DATA_DIR / "markers"), "project": ""}],
 }
@@ -375,7 +376,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload["events"] = state["events"][-150:]
                 payload["config"] = {"stale_minutes": config["stale_minutes"], "notify": config["notify"],
                                      "watch": config["watch"], "lan": config["lan"],
-                                     "popup_sound": config.get("popup_sound", True)}
+                                     "popup_sound": config.get("popup_sound", True),
+                                     "popup_volume": config.get("popup_volume", 80)}
                 payload["server_time"] = now_iso()
                 payload["host"] = socket.gethostname()
             self.send_json(payload)
@@ -390,7 +392,7 @@ class Handler(BaseHTTPRequestHandler):
                 last = state.get("alert_seq", 0)
                 alerts = [a for a in state["alerts"] if after >= 0 and a["id"] > after]
                 self.send_json({"last": last, "alerts": alerts, "show": dict(ui_show),
-                                "sound": config.get("popup_sound", True)})
+                                "sound": config.get("popup_sound", True), "volume": config.get("popup_volume", 80)})
             return
         if url.path == "/api/alert":
             with lock:
@@ -449,6 +451,8 @@ class Handler(BaseHTTPRequestHandler):
                 for k in ("notify", "lan", "popup_sound"):
                     if isinstance(body.get(k), bool):
                         config[k] = body[k]
+                if isinstance(body.get("popup_volume"), int) and 0 <= body["popup_volume"] <= 100:
+                    config["popup_volume"] = body["popup_volume"]
                 if isinstance(body.get("stale_minutes"), int) and body["stale_minutes"] > 0:
                     config["stale_minutes"] = body["stale_minutes"]
                 if isinstance(body.get("watch"), list):
