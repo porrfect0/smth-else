@@ -20,7 +20,7 @@ application_hourglass-1 check-0 check-1 computer-1 directory_closed-1 envelope_c
 help_book_small-0 help_book_small-1 loudspeaker_muted-0 loudspeaker_rays-0 msg_error-0 msg_error-2
 msg_information-0 msg_question-0 msg_question-2 msg_warning-2 network_normal_two_pcs-0
 network_normal_two_pcs-1 notepad-1 recycle_bin_full-0 users-0 world-0 world-1
-envelope_closed-0 envelope_open_sheet-1 notepad_file-0
+envelope_closed-0 envelope_open_sheet-1 notepad_file-0 msg_warning-0
 """.split()
 
 

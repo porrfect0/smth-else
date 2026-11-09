@@ -33,5 +33,5 @@ function New-Shortcut($path, $arguments) {
     $s.Save()
 }
 New-Shortcut (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Agent Board.lnk') ''
-New-Shortcut (Join-Path ([Environment]::GetFolderPath('Startup')) 'Agent Board (background).lnk') '--background'
+New-Shortcut (Join-Path ([Environment]::GetFolderPath('Startup')) 'Agent Board (background).lnk') '--hidden'
 Write-Host 'Agent Board installed: Desktop shortcut + autostart.'

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="only light">
+<title>Agent Board</title>
+<link rel="stylesheet" href="vendor/98.css">
+<style>
+  :root { color-scheme: only light; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: silver; color: #000; }
+  img { image-rendering: pixelated; }
+  .window { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .title-bar-text { display: flex; align-items: center; gap: 4px; flex: 1; overflow: hidden; white-space: nowrap; }
+  .title-bar-text img { width: 16px; height: 16px; }
+  .window-body { flex: 1; display: flex; flex-direction: column; margin: 8px 10px 8px; min-height: 0; }
+  .msg { display: flex; gap: 12px; flex: 1; min-height: 0; }
+  .msg > img { width: 32px; height: 32px; flex: none; }
+  .text { min-width: 0; font-size: 11px; }
+  .text b { display: block; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .text p { margin: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .buttons { display: flex; justify-content: flex-end; gap: 6px; flex: none; }
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="title-bar">
+    <div class="title-bar-text"><img src="icons/network_normal_two_pcs-1.png" alt=""><span id="caption">Agent Board</span></div>
+    <div class="title-bar-controls"><button aria-label="Close" data-do="close"></button></div>
+  </div>
+  <div class="window-body">
+    <div class="msg">
+      <img id="icon" src="icons/msg_information-0.png" alt="">
+      <div class="text"><b id="title"></b><p id="body"></p></div>
+    </div>
+    <div class="buttons">
+      <button class="default" data-do="open">Открыть</button>
+      <button data-do="close">OK</button>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+const ICON = { forward: "envelope_closed-0", reply: "msg_question-0", blocked: "msg_error-0", limit: "msg_warning-0", done: "check-0" };
+const api = () => window.pywebview && window.pywebview.api;
+const id = new URLSearchParams(location.search).get("id");
+
+fetch(`/api/alert?id=${encodeURIComponent(id)}`).then((r) => r.json()).then((a) => {
+  if (a.error) return;
+  document.getElementById("caption").textContent = `Agent Board — ${a.project}`;
+  document.getElementById("title").textContent = a.title;
+  document.getElementById("title").title = a.title;
+  document.getElementById("body").textContent = a.body;
+  document.getElementById("icon").src = `icons/${ICON[a.kind] || "msg_information-0"}.png`;
+});
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-do]");
+  if (b) api()?.[b.dataset.do]();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") api()?.open();
+  if (e.key === "Escape") api()?.close();
+});
+</script>
+</body>
+</html>

@@ -7,7 +7,6 @@ import json
 import os
 import secrets
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -34,6 +33,7 @@ DEFAULT_CONFIG = {
     "port": 8098,
     "lan": True,
     "notify": True,
+    "popup_sound": True,
     "stale_minutes": 90,
     "watch": [{"path": str(DATA_DIR / "markers"), "project": ""}],
 }
@@ -69,6 +69,7 @@ state.setdefault("agents", {})
 state.setdefault("todos", [])
 state.setdefault("events", [])
 state.setdefault("seen_ids", [])
+state.setdefault("alerts", [])
 state.setdefault("next_id", 1)
 state["version"] = state.get("version", 0) + 1
 for _t in state["todos"]:
@@ -83,34 +84,21 @@ def save_state():
     write_json_atomic(STATE_FILE, state)
 
 
-# --- notifications --------------------------------------------------------------
+# --- desktop popups ---------------------------------------------------------------
+# Windows toasts are not used: the desktop app (launch.pyw) polls /api/desktop and shows
+# its own Win98-style popups, so the system notification sound never plays.
 
-TOAST_PS = r"""
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] > $null
-[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] > $null
-$t = [Security.SecurityElement]::Escape($env:AB_TITLE)
-$b = [Security.SecurityElement]::Escape($env:AB_BODY)
-$x = New-Object Windows.Data.Xml.Dom.XmlDocument
-$x.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$t</text><text>$b</text></binding></visual></toast>")
-# Windows PowerShell's own AppUserModelID: lets toasts show without registering an app.
-$id = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show([Windows.UI.Notifications.ToastNotification]::new($x))
-"""
+MAX_ALERTS = 100
+ui_show = {"seq": 0, "todo": None, "project": None}
 
 
-def notify(title, body):
-    if not config.get("notify") or os.name != "nt":
+def push_alert(kind, project, title, body, todo_id):
+    if not config.get("notify"):
         return
-    # Agent text goes through env vars, never into the script source.
-    env = {**os.environ, "AB_TITLE": title[:200], "AB_BODY": body[:500]}
-    try:
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", TOAST_PS],
-            env=env, creationflags=0x08000000,  # CREATE_NO_WINDOW
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except OSError:
-        pass
+    state["alert_seq"] = state.get("alert_seq", 0) + 1
+    state["alerts"].append({"id": state["alert_seq"], "kind": kind, "project": project, "title": title[:200],
+                            "body": (body or "")[:600], "todo": todo_id, "time": now_iso()})
+    del state["alerts"][:-MAX_ALERTS]
 
 
 # --- marker processing ----------------------------------------------------------
@@ -230,11 +218,14 @@ def apply_event(ev):
                 t["auto"] = True
 
     kind = todo_kind(ev)
+    todo_id = None
     if kind:
         message = ev["message"] or default_message(ev)
         existing = next((t for t in state["todos"] if t["done_at"] is None and t["kind"] == kind
                          and same_agent(t, ev["project"], ev["agent"])
                          and (kind != "forward" or (t["task"] == ev["task"] and t["to"] == ev["to"]))), None)
+        if existing:
+            todo_id = existing["id"]
         if existing and not existing["forwarded_at"]:
             existing.update({"note": ev["note"], "result": ev["result"], "created": ev["time"],
                              "waiting_for": ev["waiting_for"], "message": message,
@@ -253,17 +244,17 @@ def apply_event(ev):
     closed = sorted((t for t in state["todos"] if t["done_at"] is not None), key=lambda t: t["done_at"])[-100:]
     state["todos"] = sorted(open_todos + closed, key=lambda t: t["id"])
 
-    who = f'{ev["agent"]} ({ev["project"]})'
-    if kind == "forward":
-        notify(f"{who}: переслать → {ev['to']}", ev["task"] or ev["note"] or " ")
-    elif kind == "reply":
-        notify(f"{who} ждёт вашего ответа", ev["task"] or ev["note"] or " ")
-    elif kind == "blocked":
-        notify(f"{who} заблокирован", ev["note"] or ev["task"] or " ")
-    elif kind == "limit":
-        notify(f"{who}: закончился лимит модели", ev["note"] or ev["task"] or " ")
-    elif ev["state"] == "done":
-        notify(f"{who} закончил", ev["task"] or " ")
+    who = ev["agent"]
+    alert = {
+        "forward": (f"{who}: переслать → {ev['to']}", ev["task"] or ev["note"]),
+        "reply": (f"{who} ждёт вашего ответа", ev["task"] or ev["note"]),
+        "blocked": (f"{who} заблокирован", ev["note"] or ev["task"]),
+        "limit": (f"{who}: закончился лимит модели", ev["note"] or ev["task"]),
+    }.get(kind)
+    if not alert and ev["state"] == "done":
+        alert = (f"{who} закончил", ev["task"])
+    if alert:
+        push_alert(kind or "done", ev["project"], alert[0], alert[1], todo_id)
 
 
 def archive(f, folder, sub):
@@ -383,10 +374,28 @@ class Handler(BaseHTTPRequestHandler):
                 payload = {k: state[k] for k in ("version", "agents", "todos")}
                 payload["events"] = state["events"][-150:]
                 payload["config"] = {"stale_minutes": config["stale_minutes"], "notify": config["notify"],
-                                     "watch": config["watch"], "lan": config["lan"]}
+                                     "watch": config["watch"], "lan": config["lan"],
+                                     "popup_sound": config.get("popup_sound", True)}
                 payload["server_time"] = now_iso()
                 payload["host"] = socket.gethostname()
             self.send_json(payload)
+            return
+        if url.path == "/api/desktop":
+            # Polled by the desktop app: new popups after ?after=<id> and requests to show the main window.
+            try:
+                after = int(query.get("after", ["-1"])[0])
+            except ValueError:
+                after = -1
+            with lock:
+                last = state.get("alert_seq", 0)
+                alerts = [a for a in state["alerts"] if after >= 0 and a["id"] > after]
+                self.send_json({"last": last, "alerts": alerts, "show": dict(ui_show),
+                                "sound": config.get("popup_sound", True)})
+            return
+        if url.path == "/api/alert":
+            with lock:
+                alert = next((a for a in state["alerts"] if str(a["id"]) == query.get("id", [""])[0]), None)
+            self.send_json(alert or {"error": "not found"}, 200 if alert else 404)
             return
         if url.path == "/api/pairing":
             port = self.server.server_address[1]
@@ -427,10 +436,17 @@ class Handler(BaseHTTPRequestHandler):
                     todo["forwarded_at"] = None
                     todo["acked_at"] = None
                 todo["auto"] = False
+            elif url.path == "/api/ui/show":
+                # A second launch (desktop shortcut) asks the running desktop app to show its window.
+                ui_show["seq"] += 1
+                ui_show["todo"] = body.get("todo") if isinstance(body.get("todo"), int) else None
+                ui_show["project"] = clean(body.get("project"), 60) or None
+                self.send_json({"ok": True})
+                return
             elif url.path == "/api/agent/forget":
                 state["agents"].pop(f'{body.get("project")}/{body.get("agent")}', None)
             elif url.path == "/api/config":
-                for k in ("notify", "lan"):
+                for k in ("notify", "lan", "popup_sound"):
                     if isinstance(body.get(k), bool):
                         config[k] = body[k]
                 if isinstance(body.get("stale_minutes"), int) and body["stale_minutes"] > 0:
