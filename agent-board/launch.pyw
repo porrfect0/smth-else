@@ -249,7 +249,7 @@ class Desktop:
                 on_top=True, focus=False, background_color="#C0C0C0",
             )
             api._window = win
-            win.events.before_show += hide_from_taskbar
+            win.events.shown += lambda: fix_popup(win, x, y)
             win.events.closed += lambda: self.forget_popup(win)
             self.popups[slot] = win
         if sound:
@@ -289,12 +289,25 @@ class Desktop:
             time.sleep(1.5)
 
 
-def hide_from_taskbar(window):
-    """Popups are tool windows: no taskbar button. Runs before the form is first shown."""
-    hwnd = window.native.Handle.ToInt32()
+def fix_popup(window, x, y):
+    """Turn a shown popup into a tool window (no taskbar button) with its exact size.
+
+    WinForms reapplies the extended style on first Show and sizes a frameless form by the
+    frame it no longer has, so both are corrected after the window appears.
+    """
+    from ctypes import wintypes
+
     user32 = ctypes.windll.user32
+    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    hwnd = wintypes.HWND(window.native.Handle.ToInt64())
+    scale = user32.GetDpiForWindow(hwnd) / 96 if hasattr(user32, "GetDpiForWindow") else 1
+    user32.ShowWindow(hwnd, 0)  # SW_HIDE: the taskbar only drops the button for a hidden window
     ex = user32.GetWindowLongW(hwnd, -20)
     user32.SetWindowLongW(hwnd, -20, (ex | 0x00000080) & ~0x00040000)  # +TOOLWINDOW, -APPWINDOW
+    user32.SetWindowPos(hwnd, wintypes.HWND(-1), int(x * scale), int(y * scale),  # HWND_TOPMOST
+                        int(POPUP_W * scale), int(POPUP_H * scale), 0x0010 | 0x0020)  # NOACTIVATE|FRAMECHANGED
+    user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
 
 
 _mutex = None
